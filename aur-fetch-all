@@ -1,0 +1,181 @@
+#!/bin/bash
+# aur-fetch-all - fetch all needed packages (include dependencies) from AUR
+set -o errexit -o pipefail
+shopt -s extglob
+readonly PKGBUILD_DIR=${PKGBUILD_DIR:-$HOME/pkgbuilds}
+readonly AURPKG_FILE=${AURPKG_FILE:-$PKGBUILD_DIR/.meta/list/aur_explicit_install}
+readonly argv0=fetch-all
+readonly PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+
+# default arguments
+pkgbuild_dir="${PKGBUILD_DIR}"
+aurpkg_file="${AURPKG_FILE}"
+
+# default options
+list=0 fetch=1 check=1
+
+lib32() {
+    awk -v arch="$(uname -m)" '{
+        if(arch == "i686") {
+            gsub(/^lib32-/,"")
+            gsub(/^gcc-multilib$/,"")
+        }
+        print
+    }'
+}
+
+# files: $1 pkgname\tpkgbase $2 pkgname (order by $2)
+select_pkgbase() {
+    awk 'NR == FNR {
+        map[$1] = $2
+        next
+    }
+    $1 in map {
+        base = map[$1]
+
+        # only print pkgbase on first occurence
+        if (base in seen) {
+            next
+        } else {
+            print base
+            seen[base]
+        }
+    }' "$@"
+}
+
+# fields: $1 pkgname, $2 depends[<>=]
+tr_ver() {
+    awk -F'[<>=]' '{print $1}'
+}
+
+complement() {
+    # empty set should not return 1
+    grep -Fxvf "$@" || return $(($?-1))
+}
+
+order() {
+    cut -f1,2 depends | tr_ver | tsort | tac
+}
+
+# NOTE: first column of every line in input is a package, if the package isn't foundable, we will print the whole line
+filter_installable() {
+    inverse_mask=$(comm -12 <(cut -f1 "$1" | sort) installable_packages | paste -s -d '|')
+
+    if test -z "$inverse_mask"; then
+        cat "$1"
+    else
+        awk -v "inverse_mask=$inverse_mask" '$1 !~ inverse_mask {print $0}' "$1"
+    fi
+}
+
+trap_exit() {
+    if [[ ! -o xtrace ]]; then
+        rm -rf "$tmp"
+    fi
+}
+
+usage() {
+    plain "usage: $argv0 [-d repo] [-a path]" >&2
+    exit 1
+}
+
+source /usr/share/makepkg/util/util.sh
+source /usr/share/makepkg/util/message.sh
+source /usr/share/makepkg/util/parseopts.sh
+
+if [[ -t 2 && ! -o xtrace ]]; then
+    colorize
+fi
+
+opt_short='d:a:p:'
+opt_long=('ignore:' 'ignore-file:' 'aurpkg-file:' 'pkgbuild-dir:'
+          'list' 'no-fetch' 'no-check')
+opt_hidden=('dump-options')
+
+if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
+    usage
+fi
+set -- "${OPTRET[@]}"
+
+unset pkg pkg_i
+while true; do
+    case "$1" in
+        -d|--database)        shift; repo_args+=(-d "$1") ;;
+        -p|--pkgbuild-dir)    shift; pkgbuild_dir="$1" ;;
+        -a|--aurpkg-file)     shift; aurpkg_file="$1" ;;
+        --list)               list=1 ;;
+        --no-check)           check=0 ;;
+        --no-fetch)           fetch=0 ;;
+        --ignore)             shift; IFS=, read -a pkg -r <<< "$1"
+                              pkg_i+=("${pkg[@]}") ;;
+        --ignore-file)        shift; mapfile -t pkg_i < "$1" ;;
+        --dump-options)       printf -- '--%s\n' "${opt_long[@]}" ;
+                              printf -- '%s' "${opt_short}" | sed 's/.:\?/-&\n/g' ;
+                              exit ;;
+        --) shift; break ;;
+    esac
+    shift
+done
+unset opt_short opt_long OPTRET
+
+tmp=$(mktemp -dt "$argv0".XXXXXXXX)
+trap 'trap_exit' EXIT
+
+cd_safe "$tmp"
+
+# retrieve path to local repo (#448)
+aur repo "${repo_args[@]}" --list --status-file=db >db_info
+
+{ IFS= read -r db_name
+  IFS= read -r db_root
+} <db
+
+if [[ -w $db_root/$db_name.db ]]; then
+    msg "Using [$db_name] repository" >&2
+else
+    error "$argv0: $db_root/$db_name.db: permission denied"
+    exit 13
+fi
+
+xargs --arg-file="$aurpkg_file" aur depends --table >depends_0
+
+pacconf --repo-list | complement <(echo "$db_name") | paste -s -d ' ' >repos
+
+xargs --arg-file=repos pacman -Slq | sort | uniq >installable_packages
+
+filter_installable depends_0 >depends
+
+# $1 pkgname $2 pkgbase $3 pkgver
+cut -f2 --complement depends | sort -u >pkginfo
+
+{ if ((${#pkg_i[@]})); then
+      printf >&2 'warning: ignoring %s package\n' "${pkg_i[@]}"
+      printf '%s\n' "${pkg_i[@]}"
+  fi
+
+  # packages that have higher version in the repository "$db_name"
+  if ((check)); then
+      cut -f1,3 pkginfo | aur vercmp -p db_info -c
+  fi
+
+} >filter
+
+# pkgname queue (AUR + repos)
+order depends | lib32 | complement filter >queue_0
+
+# pkgbase queue (AUR)
+cut -f1,2 pkginfo | select_pkgbase - queue_0 >queue
+
+cd_safe "$pkgbuild_dir"
+
+if ((list)); then
+    cat "$tmp"/queue
+fi
+
+if ((fetch)); then
+    while read -r pkg; do
+        aurpublish -p "$pkg"
+    done <"$tmp"/queue
+fi
+
+# vim: set et sw=4 sts=4 ft=sh:

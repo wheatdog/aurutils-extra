@@ -1,0 +1,90 @@
+#!/bin/bash
+# aur-build-all - build all packages in folder
+set -o errexit -o pipefail
+shopt -s extglob
+readonly PKGBUILD_DIR=${PKGBUILD_DIR:-$HOME/pkgbuilds}
+readonly argv0=build-all
+readonly PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+
+# default arguments
+build_args=(-c)
+
+trap_exit() {
+    if [[ ! -o xtrace ]]; then
+        rm -rf "$tmp"
+    fi
+}
+
+usage() {
+    plain "usage: $argv0 [-d repo] [-p path] [-f] [--]" >&2
+    exit 1
+}
+
+tmp=$(mktemp -dt "$argv0".XXXXXXXX)
+trap 'trap_exit' EXIT
+
+source /usr/share/makepkg/util/util.sh
+source /usr/share/makepkg/util/message.sh
+source /usr/share/makepkg/util/parseopts.sh
+
+if [[ -t 2 && ! -o xtrace ]]; then
+    colorize
+fi
+
+opt_short='d:p:f'
+opt_long=('force' 'pkgbuild-dir:' 'database:')
+opt_hidden=('dump-options')
+
+if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
+    usage
+fi
+set -- "${OPTRET[@]}"
+
+pkgbuild_dir="${PKGBUILD_DIR}"
+
+while true; do
+    case "$1" in
+        -d|--database)       shift; repo_args+=(-d "$1") ;;
+        -f|--force)          build_args+=(-f) ;;
+        -p|--pkgbuild-dir)   shift; pkgbuild_dir="$1" ;;
+        --dump-options)      printf -- '--%s\n' "${opt_long[@]}" ;
+                             printf -- '%s' "${opt_short}" | sed 's/.:\?/-&\n/g' ;
+                             exit ;;
+        --) shift; break;;
+    esac
+    shift
+done
+unset opt_short opt_long OPTRET
+
+cd_safe "$tmp"
+
+# retrieve path to local repo (#448)
+aur repo "${repo_args[@]}" --list --status-file=db >db_info
+
+{ IFS= read -r db_name
+  IFS= read -r db_root
+} <db
+
+if [[ -w $db_root/$db_name.db ]]; then
+    msg "Using [$db_name] repository" >&2
+else
+    error "$argv0: $db_root/$db_name.db: permission denied"
+    exit 13
+fi
+
+# filter out local repository
+pacman-conf >raw-pacman.conf
+csplit -f pacman raw-pacman.conf "/\[*\]/" "{*}" >/dev/null
+for part in $(find * -name "pacman*"); do 
+    if ! grep -qe "^Server = file:///.*" $part ; then
+        cat "$part"
+    fi
+done >processed-pacman.conf
+
+cd_safe "$pkgbuild_dir"
+
+aur graph */.SRCINFO | tsort | tac >"$tmp"/queue
+
+build_args+=(-a "$tmp"/queue -C "$tmp"/processed-pacman.conf -d "$db_name" -r "$db_root")
+
+aur build "${build_args[@]}" 
