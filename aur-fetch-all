@@ -178,4 +178,6 @@ if ((fetch)); then
     done <"$tmp"/queue
 fi
 
+# handle vcs package
+AURDEST="$pkgbuild_dir" aur vercmp-devel
 # vim: set et sw=4 sts=4 ft=sh:
