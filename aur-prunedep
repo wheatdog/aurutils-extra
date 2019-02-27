@@ -92,6 +92,7 @@ def main(args):
             line = line.strip()
             start_pkgs.add(line)
 
+    start_pkgs = start_pkgs - exclude_pkgs
     graph = PackageGraph(args.depends_file)
     graph.traverse_and_print_without_sub(exclude_pkgs, start_pkgs)
 
