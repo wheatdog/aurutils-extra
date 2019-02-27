@@ -48,9 +48,7 @@ class PackageGraph:
             self.traverse_and_print_without_sub_reccur(child_info, nodes_color, exclude_pkgs)
         nodes_color[node] = 2
 
-    def traverse_and_print_without_sub(self, exclude_pkgs):
-        head_nodes = self.head()
-
+    def traverse_and_print_without_sub(self, exclude_pkgs, start_pkgs):
         '''
         0: white, not visited 
         1: grey, being visited
@@ -61,24 +59,9 @@ class PackageGraph:
         for node in self.nodes:
             nodes_color[node] = 0
 
-        for node in head_nodes:
+        for node in start_pkgs:
             for child_info in self.adjlist[node]:
                 self.traverse_and_print_without_sub_reccur(child_info, nodes_color, exclude_pkgs)
-
-    def head(self):
-        candidates = set()
-        for node in self.nodes:
-            candidates.add(node)
-
-        for node in self.nodes:
-            for child_info in self.adjlist[node]:
-                child = child_info[0]
-                if child.endswith('*'): 
-                    continue
-                if child in candidates:
-                    candidates.remove(child)
-
-        return candidates
 
 def get_args():
     parser = argparse.ArgumentParser(prog='aur-prunedep')
@@ -86,6 +69,10 @@ def get_args():
                         required=True,
                         type=str,
                         help='file list package name that need to filter out line by line')
+    parser.add_argument("-s", "--start-file",
+                        required=True,
+                        type=str,
+                        help='file list package names that are root of dependency graph')
     parser.add_argument("-f", "--depends-file",
                         required=True,
                         type=str,
@@ -99,8 +86,14 @@ def main(args):
             line = line.strip()
             exclude_pkgs.add(line)
 
+    start_pkgs = set()
+    with open(args.start_file) as f:
+        for line in f:
+            line = line.strip()
+            start_pkgs.add(line)
+
     graph = PackageGraph(args.depends_file)
-    graph.traverse_and_print_without_sub(exclude_pkgs)
+    graph.traverse_and_print_without_sub(exclude_pkgs, start_pkgs)
 
 if __name__ == '__main__':
     main(get_args())
