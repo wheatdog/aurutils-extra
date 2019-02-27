@@ -1,0 +1,106 @@
+#!/usr/bin/env python
+
+import sys
+import argparse
+
+class PackageGraph:
+    def __init__(self, depends_file):
+        self.nodes = set()
+        self.adjlist = dict()
+
+        # pkgname\tdepends\tpkgbase\tpkgver
+        with open(depends_file) as f:
+            for line in f:
+                line = line.strip()
+                elem = line.strip().split()
+                assert len(elem) == 4
+                assert elem[0] == elem[2]
+                if elem[0] == elem[1]:
+                    elem[1] = '{}*'.format(elem[1])
+                if elem[0] not in self.adjlist:
+                    self.adjlist[elem[0]] = set()
+                self.adjlist[elem[0]].add((elem[1], line))
+
+        for node in self.adjlist.keys():
+            self.nodes.add(node)
+
+    def traverse_and_print_without_sub_reccur(self, node_info, nodes_color, exclude_pkgs):
+        node = node_info[0]
+
+        if node in exclude_pkgs:
+            return
+
+        if node not in self.nodes:
+            print(node_info[1])
+            return
+
+        if nodes_color[node] == 2:
+            return
+
+        if nodes_color[node] == 1:
+            print("Contain a loop!", file=sys.stderr)
+            exit()
+
+        print(node_info[1])
+
+        nodes_color[node] = 1
+        for child_info in self.adjlist[node]:
+            self.traverse_and_print_without_sub_reccur(child_info, nodes_color, exclude_pkgs)
+        nodes_color[node] = 2
+
+    def traverse_and_print_without_sub(self, exclude_pkgs):
+        head_nodes = self.head()
+
+        '''
+        0: white, not visited 
+        1: grey, being visited
+        2: black, already visited
+        '''
+        nodes_color = {}
+
+        for node in self.nodes:
+            nodes_color[node] = 0
+
+        for node in head_nodes:
+            for child_info in self.adjlist[node]:
+                self.traverse_and_print_without_sub_reccur(child_info, nodes_color, exclude_pkgs)
+
+    def head(self):
+        candidates = set()
+        for node in self.nodes:
+            candidates.add(node)
+
+        for node in self.nodes:
+            for child_info in self.adjlist[node]:
+                child = child_info[0]
+                if child.endswith('*'): 
+                    continue
+                if child in candidates:
+                    candidates.remove(child)
+
+        return candidates
+
+def get_args():
+    parser = argparse.ArgumentParser(prog='aur-prunedep')
+    parser.add_argument("-e", "--exclude-file",
+                        required=True,
+                        type=str,
+                        help='file list package name that need to filter out line by line')
+    parser.add_argument("-f", "--depends-file",
+                        required=True,
+                        type=str,
+                        help='output of aur depends --tables')
+    return parser.parse_args()
+
+def main(args):
+    exclude_pkgs = set()
+    with open(args.exclude_file) as f:
+        for line in f:
+            line = line.strip()
+            exclude_pkgs.add(line)
+
+    graph = PackageGraph(args.depends_file)
+    graph.traverse_and_print_without_sub(exclude_pkgs)
+
+if __name__ == '__main__':
+    main(get_args())

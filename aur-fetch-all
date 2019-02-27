@@ -143,7 +143,7 @@ pacconf --repo-list | complement <(echo "$db_name") | paste -s -d ' ' >repos
 
 xargs --arg-file=repos pacman -Slq | sort | uniq >installable_packages
 
-filter_installable depends_0 >depends
+aur prunedep -f depends_0 -e installable_packages >depends
 
 # $1 pkgname $2 pkgbase $3 pkgver
 cut -f2 --complement depends | sort -u >pkginfo
