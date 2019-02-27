@@ -77,8 +77,7 @@ if [[ -t 2 && ! -o xtrace ]]; then
 fi
 
 opt_short='d:a:p:'
-opt_long=('ignore:' 'ignore-file:' 'aurpkg-file:' 'pkgbuild-dir:'
-          'list' 'no-fetch' 'no-check')
+opt_long=('aurpkg-file:' 'pkgbuild-dir:' 'list' 'no-fetch' 'no-check')
 opt_hidden=('dump-options')
 
 if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
@@ -95,9 +94,6 @@ while true; do
         --list)               list=1 ;;
         --no-check)           check=0 ;;
         --no-fetch)           fetch=0 ;;
-        --ignore)             shift; IFS=, read -a pkg -r <<< "$1"
-                              pkg_i+=("${pkg[@]}") ;;
-        --ignore-file)        shift; mapfile -t pkg_i < "$1" ;;
         --dump-options)       printf -- '--%s\n' "${opt_long[@]}" ;
                               printf -- '%s' "${opt_short}" | sed 's/.:\?/-&\n/g' ;
                               exit ;;
@@ -137,17 +133,10 @@ aur prunedep -f depends_0 -e installable_packages -s "$aurpkg_file" >depends
 # $1 pkgname $2 pkgbase $3 pkgver
 cut -f2 --complement depends | sort -u >pkginfo
 
-{ if ((${#pkg_i[@]})); then
-      printf >&2 'warning: ignoring %s package\n' "${pkg_i[@]}"
-      printf '%s\n' "${pkg_i[@]}"
-  fi
-
-  # packages that have higher version in the repository "$db_name"
-  if ((check)); then
-      cut -f1,3 pkginfo | aur vercmp -p db_info -c
-  fi
-
-} >filter
+# packages that have higher version in the repository "$db_name"
+if ((check)); then
+    cut -f1,3 pkginfo | aur vercmp -p db_info -c
+fi >filter
 
 # pkgname queue (AUR + repos)
 order depends | lib32 | complement filter >queue_0
