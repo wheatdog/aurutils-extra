@@ -57,17 +57,6 @@ order() {
     cut -f1,2 depends | tr_ver | tsort | tac
 }
 
-# NOTE: first column of every line in input is a package, if the package isn't foundable, we will print the whole line
-filter_installable() {
-    inverse_mask=$(comm -12 <(cut -f1 "$1" | sort) installable_packages | paste -s -d '|')
-
-    if test -z "$inverse_mask"; then
-        cat "$1"
-    else
-        awk -v "inverse_mask=$inverse_mask" '$1 !~ inverse_mask {print $0}' "$1"
-    fi
-}
-
 trap_exit() {
     if [[ ! -o xtrace ]]; then
         rm -rf "$tmp"
