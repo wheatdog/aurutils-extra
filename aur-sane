@@ -1,0 +1,102 @@
+#!/bin/bash
+# aur-sane - build all packages in folder
+set -o errexit -o pipefail
+shopt -s extglob
+readonly PKGBUILD_DIR=${PKGBUILD_DIR:-$HOME/pkgbuilds}
+readonly AURPKG_FILE=${AURPKG_FILE:-$PKGBUILD_DIR/.meta/list/aur_explicit_install}
+readonly INTPKG_FILE=${INTPKG_FILE:-$PKGBUILD_DIR/.meta/list/internal_explicit_install}
+readonly argv0=sane
+readonly PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+
+# default arguments
+repo_args=()
+pkgbuild_dir="${PKGBUILD_DIR}"
+aurpkg_file="${AURPKG_FILE}"
+intpkg_file="${INTPKG_FILE}"
+
+real_db_path() {
+    pushd $(dirname $1) >/dev/null
+    realpath $(readlink $1)
+    popd >/dev/null
+}
+
+trap_exit() {
+    if [[ ! -o xtrace ]]; then
+        rm -rf "$tmp"
+    fi
+}
+
+usage() {
+    plain "usage: $argv0 [-d repo] [-a path]" >&2
+    exit 1
+}
+
+source /usr/share/makepkg/util/util.sh
+source /usr/share/makepkg/util/message.sh
+source /usr/share/makepkg/util/parseopts.sh
+
+if [[ -t 2 && ! -o xtrace ]]; then
+    colorize
+fi
+
+opt_short='d:a:p:i:'
+opt_long=('aurpkg-file:' 'pkgbuild-dir:' 'intpkg-file:')
+opt_hidden=('dump-options')
+
+if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
+    usage
+fi
+set -- "${OPTRET[@]}"
+
+unset pkg pkg_i
+while true; do
+    case "$1" in
+        -d|--database)        shift; repo_args+=(-d "$1") ;;
+        -p|--pkgbuild-dir)    shift; pkgbuild_dir="$1" ;;
+        -a|--aurpkg-file)     shift; aurpkg_file="$1" ;;
+        -i|--intpkg-file)     shift; intpkg_file="$1" ;;
+        --dump-options)       printf -- '--%s\n' "${opt_long[@]}" ;
+                              printf -- '%s' "${opt_short}" | sed 's/.:\?/-&\n/g' ;
+                              exit ;;
+        --) shift; break ;;
+    esac
+    shift
+done
+unset opt_short opt_long OPTRET
+
+tmp=$(mktemp -dt "$argv0".XXXXXXXX)
+trap 'trap_exit' EXIT
+
+cd_safe "$tmp"
+
+real_db_path $(aur repo "${repo_args[@]}") >db_path
+
+repoctl new config -c repoctl.toml $(cat db_path) >/dev/null
+
+REPOCTL_CONFIG=$(realpath repoctl.toml) repoctl list >in_repo
+
+aur fetch-all -p "$pkgbuild_dir" -a "$aurpkg_file" --no-fetch --no-check --list 2>/dev/null >aur_needed
+
+comm -12 <(sort aur_needed) <(sort $intpkg_file) >same
+if [[ -s same ]]; then
+    msg "Common packages between internal and AUR (explicit and their required dependencies)":
+    cat same
+fi
+
+sort aur_needed $intpkg_file | uniq >needed
+
+find "$pkgbuild_dir" -mindepth 1 -maxdepth 1 -type d -not -path '*/\.*' -exec basename {} \; >downloaded
+
+comm -23 <(sort downloaded) <(sort in_repo) >unseen
+if [[ -s unseen ]]; then
+    msg "Unseen packages (In $pkgbuild_dir but not in $(cat db_path)):"
+    cat unseen
+fi
+
+comm -23 <(sort downloaded) <(sort needed) >unnecessary
+if [[ -s unnecessary ]]; then
+    msg "Unnecessary packages:"
+    cat unnecessary
+fi
+
+# vim: set et sw=4 sts=4 ft=sh:
