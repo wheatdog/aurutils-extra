@@ -99,4 +99,6 @@ if [[ -s unnecessary ]]; then
     cat unnecessary
 fi
 
+REPOCTL_CONFIG=$(realpath repoctl.toml) repoctl status
+
 # vim: set et sw=4 sts=4 ft=sh:
