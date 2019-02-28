@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import re
 import sys
 import argparse
 
@@ -14,6 +15,7 @@ class PackageGraph:
                 line = line.strip()
                 elem = line.strip().split()
                 assert len(elem) == 4
+                elem[1] = re.split('>|=|<', elem[1])[0]
                 assert elem[0] == elem[2]
                 if elem[0] == elem[1]:
                     elem[1] = '{}*'.format(elem[1])
