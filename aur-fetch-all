@@ -8,6 +8,7 @@ readonly argv0=fetch-all
 readonly PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 
 # default arguments
+repo_args=()
 pkgbuild_dir="${PKGBUILD_DIR}"
 aurpkg_file="${AURPKG_FILE}"
 
@@ -154,8 +155,9 @@ if ((fetch)); then
     while read -r pkg; do
         aurpublish -p "$pkg"
     done <"$tmp"/queue
+
+    # handle vcs package
+    AURDEST="$pkgbuild_dir" aur vercmp-devel
 fi
 
-# handle vcs package
-AURDEST="$pkgbuild_dir" aur vercmp-devel
 # vim: set et sw=4 sts=4 ft=sh:
