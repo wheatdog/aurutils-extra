@@ -5,7 +5,7 @@ shopt -s extglob
 readonly PKGBUILD_DIR=${PKGBUILD_DIR:-$HOME/pkgbuilds}
 readonly AURPKG_FILE=${AURPKG_FILE:-$PKGBUILD_DIR/.meta/list/aur_explicit_install}
 readonly INTPKG_FILE=${INTPKG_FILE:-$PKGBUILD_DIR/.meta/list/internal_explicit_install}
-readonly argv0=sane
+readonly argv0=doctor
 readonly PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 
 # default arguments
@@ -13,6 +13,9 @@ repo_args=()
 pkgbuild_dir="${PKGBUILD_DIR}"
 aurpkg_file="${AURPKG_FILE}"
 intpkg_file="${INTPKG_FILE}"
+
+# default options
+dirty_check=0
 
 real_db_path() {
     pushd $(dirname $1) >/dev/null
@@ -24,6 +27,11 @@ trap_exit() {
     if [[ ! -o xtrace ]]; then
         rm -rf "$tmp"
     fi
+}
+
+ask() {
+	local mesg=$1; shift
+	printf "${BLUE}::${ALL_OFF}${BOLD} ${mesg}${ALL_OFF}" "$@" >&1
 }
 
 usage() {
@@ -40,7 +48,7 @@ if [[ -t 2 && ! -o xtrace ]]; then
 fi
 
 opt_short='d:a:p:i:'
-opt_long=('aurpkg-file:' 'pkgbuild-dir:' 'intpkg-file:')
+opt_long=('aurpkg-file:' 'pkgbuild-dir:' 'intpkg-file:' 'dirty-check')
 opt_hidden=('dump-options')
 
 if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
@@ -55,6 +63,7 @@ while true; do
         -p|--pkgbuild-dir)    shift; pkgbuild_dir="$1" ;;
         -a|--aurpkg-file)     shift; aurpkg_file="$1" ;;
         -i|--intpkg-file)     shift; intpkg_file="$1" ;;
+        --dirty-check)        shifit; dirty_check=1 ;;
         --dump-options)       printf -- '--%s\n' "${opt_long[@]}" ;
                               printf -- '%s' "${opt_short}" | sed 's/.:\?/-&\n/g' ;
                               exit ;;
@@ -81,24 +90,70 @@ comm -12 <(sort aur_needed) <(sort $intpkg_file) >same
 if [[ -s same ]]; then
     msg "Common packages between internal and AUR (explicit and their required dependencies)":
     cat same
+    exit 1
 fi
 
-sort aur_needed $intpkg_file | uniq >needed
+cat aur_needed $intpkg_file | uniq >needed
 
 find "$pkgbuild_dir" -mindepth 1 -maxdepth 1 -type d -not -path '*/\.*' -exec basename {} \; >downloaded
 
-comm -23 <(sort downloaded) <(sort in_repo) >unseen
-if [[ -s unseen ]]; then
-    msg "Unseen packages (In $pkgbuild_dir but not in $(cat db_path)):"
-    cat unseen
+if ((dirty_check)); then
+    if git -C "$pkgbuild_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        if [ ! -z "$(git -C "$pkgbuild_dir" status --porcelain)" ]; then 
+            msg "$pkgbuild_dir is dirty or there are untracked files"
+            exit 1
+        fi
+    fi
+fi
+
+comm -13 <(sort downloaded) <(sort needed) >necessary
+if [[ -s necessary ]]; then
+    msg "Necessary packages (required to aur fetch-all):"
+    cat necessary
+    exit 2
+fi
+
+comm -13 <(sort in_repo) <(sort needed) >necessary
+if [[ -s necessary ]]; then
+    msg "Necessary packages (required to aur build-all):"
+    cat necessary
+    exit 2
+fi
+
+comm -23 <(sort in_repo) <(sort needed) >unnecessary
+if [[ -s unnecessary ]]; then
+    msg "Unnecessary packages ($(cat db_path)):"
+    cat unnecessary
+    while read -u 3 -r pkg; do
+        ask "(R)emove %s from %s, (A)bort: [r/a] " "$pkg" "$(cat db_path)"
+        while read c; do
+            case $c in
+                a|A) exit 0;;
+                r|R) REPOCTL_CONFIG=$(realpath repoctl.toml) repoctl remove "$pkg"; break ;;
+                *) ask "Invalid answer. Try again: [r/a] "; continue ;;
+            esac
+        done
+    done 3<unnecessary
 fi
 
 comm -23 <(sort downloaded) <(sort needed) >unnecessary
 if [[ -s unnecessary ]]; then
-    msg "Unnecessary packages:"
+    msg "Unnecessary packages ($pkgbuild_dir):"
     cat unnecessary
+    exit 3
 fi
 
-REPOCTL_CONFIG=$(realpath repoctl.toml) repoctl status
+REPOCTL_CONFIG=$(realpath repoctl.toml) repoctl status >status
+if ! grep "Everything up-to-date." status >/dev/null; then
+    cat status
+    ask "(U)pdate, (A)bort: [u/a] "
+    while read c; do
+        case $c in
+            a|A) exit 0;;
+            u|U) REPOCTL_CONFIG=$(realpath repoctl.toml) repoctl update; break ;;
+            *) ask "Invalid answer. Try again: [u/a] "; continue ;;
+        esac
+    done
+fi
 
 # vim: set et sw=4 sts=4 ft=sh:
